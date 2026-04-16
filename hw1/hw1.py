@@ -71,3 +71,7 @@ for i in range(3):
         break
 
     current_page = urljoin(BASE, link)
+
+with open("links.txt", "w", encoding="utf-8") as f:
+    for t, u in visited:
+        f.write(f"{t} -> {u}\n")
