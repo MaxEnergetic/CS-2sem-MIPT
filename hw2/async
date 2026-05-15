@@ -1,0 +1,157 @@
+import aiohttp
+import asyncio
+from bs4 import BeautifulSoup
+from urllib.parse import unquote
+from collections import deque
+import time
+
+import networkx as nx
+import pandas as pd
+import matplotlib.pyplot as plt
+import random
+
+
+BASE = "https://en.wikipedia.org"
+HEADERS = {
+    "User-Agent": "Mozilla/5.0"
+}
+
+async def get_random_page(session):
+    url = "https://en.wikipedia.org/api/rest_v1/page/random/summary"
+    try:
+        async with session.get(url, headers=HEADERS, timeout=10) as resp:
+            if resp.status != 200:
+                raise Exception("Request failed:", resp.status)
+            
+            data = await resp.json()
+            return data["content_urls"]["desktop"]["page"]
+    except Exception as e:
+        print(f"Ошибка при получении случайной страницы: {e}")
+        return None
+
+def get_random_link(soup):
+
+    links = list(set(
+        a["href"]
+        for a in soup.find_all("a", href=True)
+        if a["href"].startswith("/wiki/") and ":" not in a["href"]
+    ))
+
+    if not links:
+        return None
+
+    return random.choice(links)
+
+target = 'Law of large numbers'
+target_link = "https://en.wikipedia.org/wiki/Law_of_large_numbers"
+max_steps = 30       
+n_runs = 50         
+sleep_time = 0.1    
+
+async def run_walk(session, max_steps=max_steps, run_id=0):
+    try:
+        current_page = await get_random_page(session)
+        
+        if not current_page:
+            return None
+        
+        for step in range(max_steps):
+            try:
+                async with session.get(current_page, headers=HEADERS, timeout=10) as response:
+                    if response.status != 200:
+                        return None
+                    
+                    text = await response.text()
+            except:
+                return None
+
+            soup = BeautifulSoup(text, "html.parser")
+
+            title_tag = soup.find("h1")
+            if not title_tag:
+                return None
+
+            title = title_tag.text.strip()
+
+            print(f"[Забег {run_id}] Шаг {step}: {title}")
+            link = current_page.split("#")[0]
+
+            if title == target or link == target_link:
+                return step
+
+            link = get_random_link(soup)
+            if not link:
+                return None
+
+            current_page = BASE + link
+
+            await asyncio.sleep(sleep_time)
+
+        return None
+        
+    except Exception as e:
+        print(f"Ошибка в забеге {run_id}: {e}")
+        return None
+
+
+async def experiment(n_runs=n_runs, concurrent_runs=5):
+    results = []
+    failures = 0
+    
+    async with aiohttp.ClientSession() as session:
+        for batch_start in range(0, n_runs, concurrent_runs):
+            batch_end = min(batch_start + concurrent_runs, n_runs)
+            batch_size = batch_end - batch_start
+            
+            tasks = [
+                run_walk(session, max_steps=max_steps, run_id=i + 1)
+                for i in range(batch_start, batch_end)
+            ]
+            
+            batch_results = await asyncio.gather(*tasks)
+            for i, steps in enumerate(batch_results):
+                if steps is not None:
+                    results.append(steps)
+                    print(f"Забег {batch_start + i + 1}: дошли за {steps} шагов")
+                else:
+                    failures += 1
+                    print(f"Забег {batch_start + i + 1}: споткнулись")
+
+    return results, failures
+
+
+def plot_results(results):
+    if not results:
+        print("Мы не дошли :(")
+        return
+
+    plt.figure(figsize=(10, 6))
+    plt.hist(results, bins=10, edgecolor='black', alpha=0.7)
+    plt.xlabel("Количество шагов")
+    plt.ylabel("Частота")
+    plt.title("Случайная прогулка до закона больших чисел (асинхронная версия)")
+    plt.grid(axis='y', alpha=0.3)
+    plt.show()
+
+
+async def main():
+    
+    start_time = time.time()
+    results, failures = await experiment(n_runs=n_runs, concurrent_runs=5)
+    end_time = time.time()
+
+    print("\n=== Итог ===")
+    print(f"Дотопали столько раз: {len(results)}")
+    print(f"Упали: {failures}")
+    print(f"Время выполнения: {end_time - start_time:.2f} секунд")
+
+    if results:
+        print(f"В среднем топали: {sum(results) / len(results):.2f} шагов")
+        print(f"Минимум: {min(results)}")
+        print(f"Максимум: {max(results)}")
+
+    plot_results(results)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
